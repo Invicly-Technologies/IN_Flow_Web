@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { User } from "@prisma/client";
+import type { Prisma, User } from "@prisma/client";
 
 export const userRepository = {
   findByEmail(email: string): Promise<User | null> {
@@ -16,5 +16,9 @@ export const userRepository = {
     fullName: string;
   }): Promise<User> {
     return prisma.user.create({ data });
+  },
+
+  update(id: string, data: Prisma.UserUncheckedUpdateInput): Promise<User> {
+    return prisma.user.update({ where: { id }, data });
   },
 };

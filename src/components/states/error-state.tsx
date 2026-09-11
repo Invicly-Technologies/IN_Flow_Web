@@ -22,8 +22,8 @@ export function ErrorState({
       )}
     >
       <AlertTriangle className="h-8 w-8 text-state-danger" />
-      <p className="font-medium text-brand-dark">{title}</p>
-      <p className="max-w-sm text-sm text-brand-dark/60">{message}</p>
+      <p className="font-medium text-text">{title}</p>
+      <p className="max-w-sm text-sm text-text-secondary">{message}</p>
       {onRetry && (
         <button
           onClick={onRetry}

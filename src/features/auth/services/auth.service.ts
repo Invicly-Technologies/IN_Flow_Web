@@ -4,7 +4,8 @@ import { generateRefreshToken, signAccessToken } from "@/lib/jwt";
 import { userRepository } from "@/features/auth/repositories/user.repository";
 import { workspaceRepository } from "@/features/auth/repositories/workspace.repository";
 import { sessionRepository } from "@/features/auth/repositories/session.repository";
-import type { RegisterInput, LoginInput } from "@/validations/auth.validations";
+import { workspaceService } from "@/features/auth/services/workspace.service";
+import type { RegisterInput, LoginInput, UpdateProfileInput, ChangePasswordInput } from "@/validations/auth.validations";
 import type { AuthResultDTO, AuthUserDTO } from "@/types/auth";
 import type { User } from "@prisma/client";
 
@@ -17,6 +18,7 @@ function toAuthUserDTO(user: User): AuthUserDTO {
     fullName: user.fullName,
     avatarUrl: user.avatarUrl,
     timezone: user.timezone,
+    isSuperAdmin: user.isSuperAdmin,
   };
 }
 
@@ -62,7 +64,9 @@ export const authService = {
       user.id
     );
 
-    return issueTokens(user, context);
+    const joinedWorkspaces = await workspaceService.acceptPendingInvites(user.id, user.email);
+
+    return { ...(await issueTokens(user, context)), joinedWorkspaces };
   },
 
   async login(
@@ -114,5 +118,31 @@ export const authService = {
       throw new ApiError("NOT_FOUND", "User not found");
     }
     return toAuthUserDTO(user);
+  },
+
+  async updateProfile(userId: string, input: UpdateProfileInput): Promise<AuthUserDTO> {
+    const existing = await userRepository.findById(userId);
+    if (!existing) {
+      throw new ApiError("NOT_FOUND", "User not found");
+    }
+    const updated = await userRepository.update(userId, {
+      ...(input.fullName !== undefined ? { fullName: input.fullName } : {}),
+      ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
+      ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
+    });
+    return toAuthUserDTO(updated);
+  },
+
+  async changePassword(userId: string, input: ChangePasswordInput): Promise<void> {
+    const user = await userRepository.findById(userId);
+    if (!user) {
+      throw new ApiError("NOT_FOUND", "User not found");
+    }
+    const valid = await verifyPassword(input.currentPassword, user.passwordHash);
+    if (!valid) {
+      throw new ApiError("UNAUTHORIZED", "Current password is incorrect");
+    }
+    const passwordHash = await hashPassword(input.newPassword);
+    await userRepository.update(userId, { passwordHash });
   },
 };

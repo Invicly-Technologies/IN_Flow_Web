@@ -16,6 +16,9 @@ next-env.d.ts
 # Testing / coverage
 coverage/
 
+# User-uploaded task attachments (local disk storage — see src/lib/storage.ts)
+public/uploads/
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -71,47 +71,58 @@ enum DevicePlatform {
   ANDROID
 }
 
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  CHECKBOX
+  SELECT
+}
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
+  id           String    @id @default(uuid())
+  email        String    @unique
   passwordHash String
   fullName     String
   avatarUrl    String?
-  timezone     String   @default("UTC")
-  createdAt    DateTime @default(now()) @db.Timestamptz
-  updatedAt    DateTime @updatedAt @db.Timestamptz
+  timezone     String    @default("UTC")
+  isSuperAdmin Boolean   @default(false)
+  createdAt    DateTime  @default(now()) @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @db.Timestamptz
   deletedAt    DateTime? @db.Timestamptz
 
-  sessions          Session[]
-  refreshTokens     RefreshToken[]
-  workspaceMembers  WorkspaceMember[]
-  projectMembers    ProjectMember[]
-  createdTasks      Task[]             @relation("TaskCreatedBy")
-  completedTasks    Task[]             @relation("TaskCompletedBy")
-  assignedTasks     Task[]             @relation("TaskAssignee")
-  comments          Comment[]
-  attachments       Attachment[]
-  notifications     Notification[]
-  devices           Device[]
-  savedFilters      SavedFilter[]
-  activityLogs      ActivityLog[]
+  sessions             Session[]
+  refreshTokens        RefreshToken[]
+  workspaceMembers     WorkspaceMember[]
+  sentWorkspaceInvites WorkspaceInvite[]
+  projectMembers       ProjectMember[]
+  createdTasks         Task[]            @relation("TaskCreatedBy")
+  completedTasks       Task[]            @relation("TaskCompletedBy")
+  assignedTasks        Task[]            @relation("TaskAssignee")
+  comments             Comment[]
+  attachments          Attachment[]
+  notifications        Notification[]
+  devices              Device[]
+  savedFilters         SavedFilter[]
+  activityLogs         ActivityLog[]
+  timeEntries          TimeEntry[]
 
   @@index([email])
 }
 
 model Session {
-  id           String    @id @default(uuid())
-  userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userAgent    String?
-  ipAddress    String?
-  createdAt    DateTime  @default(now()) @db.Timestamptz
-  lastSeenAt   DateTime  @default(now()) @db.Timestamptz
-  revokedAt    DateTime? @db.Timestamptz
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent  String?
+  ipAddress  String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+  lastSeenAt DateTime  @default(now()) @db.Timestamptz
+  revokedAt  DateTime? @db.Timestamptz
 
   refreshTokens RefreshToken[]
 
@@ -146,12 +157,14 @@ model Workspace {
   updatedAt DateTime  @updatedAt @db.Timestamptz
   deletedAt DateTime? @db.Timestamptz
 
-  members      WorkspaceMember[]
-  projects     Project[]
-  tasks        Task[]
-  labels       Label[]
-  activityLogs ActivityLog[]
-  calendarEvents CalendarEvent[]
+  members                WorkspaceMember[]
+  invites                WorkspaceInvite[]
+  projects               Project[]
+  tasks                  Task[]
+  labels                 Label[]
+  activityLogs           ActivityLog[]
+  calendarEvents         CalendarEvent[]
+  customFieldDefinitions CustomFieldDefinition[]
 
   @@index([slug])
 }
@@ -170,30 +183,64 @@ model WorkspaceMember {
   @@index([userId])
 }
 
+// A pending invite for someone who doesn't have an Invicly Flow account yet — created instead
+// of failing outright when `workspaceService.inviteByEmail` can't find a matching user.
+// Consumed automatically the moment someone registers with the invited email address.
+model WorkspaceInvite {
+  id          String        @id @default(uuid())
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  email       String
+  role        WorkspaceRole @default(MEMBER)
+  token       String        @unique
+  invitedBy   String
+  inviter     User          @relation(fields: [invitedBy], references: [id], onDelete: Cascade)
+  createdAt   DateTime      @default(now()) @db.Timestamptz
+  expiresAt   DateTime      @db.Timestamptz
+  acceptedAt  DateTime?     @db.Timestamptz
+
+  @@unique([workspaceId, email])
+  @@index([email])
+  @@index([token])
+}
+
 // ---------------------------------------------------------------------------
 // Projects & Sections
 // ---------------------------------------------------------------------------
 
 model Project {
-  id          String        @id @default(uuid())
-  workspaceId String
-  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  name        String
-  description String?
-  icon        String?
-  color       String?
-  status      ProjectStatus @default(ACTIVE)
-  startDate   DateTime?     @db.Timestamptz
-  dueDate     DateTime?     @db.Timestamptz
-  position    Int           @default(0)
-  createdAt   DateTime      @default(now()) @db.Timestamptz
-  updatedAt   DateTime      @updatedAt @db.Timestamptz
-  deletedAt   DateTime?     @db.Timestamptz
+  id           String        @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name         String
+  // Short uppercase code (e.g. "ENG") set once at creation, used as the prefix for this
+  // project's task numbers (ENG-1, ENG-2, ...) — Jira-style. Unique per workspace, nullable
+  // since projects created before this feature (or without one chosen) have no ticket prefix.
+  key          String?
+  description  String?
+  icon         String?
+  color        String?
+  status       ProjectStatus @default(ACTIVE)
+  startDate    DateTime?     @db.Timestamptz
+  dueDate      DateTime?     @db.Timestamptz
+  position     Int           @default(0)
+  // Simple mode (default): a plain task list, no assignee/estimate/custom fields shown.
+  // Advanced mode: surfaces assignee, start date, duration and custom fields on every
+  // task in this project — a lightweight Jira-style workflow, opt-in per project.
+  isAdvanced   Boolean       @default(false)
+  // Last task number issued in this project (ENG-<taskSequence>) — incremented atomically
+  // in the same transaction that assigns a new task's `number`, so numbers never collide.
+  taskSequence Int           @default(0)
+  createdAt    DateTime      @default(now()) @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @db.Timestamptz
+  deletedAt    DateTime?     @db.Timestamptz
 
-  members  ProjectMember[]
-  sections ProjectSection[]
-  tasks    Task[]
+  members    ProjectMember[]
+  sections   ProjectSection[]
+  tasks      Task[]
+  milestones Milestone[]
 
+  @@unique([workspaceId, key])
   @@index([workspaceId])
   @@index([status])
 }
@@ -232,53 +279,66 @@ model ProjectSection {
 // ---------------------------------------------------------------------------
 
 model Task {
-  id              String        @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  projectId       String?
-  project         Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  sectionId       String?
-  section         ProjectSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
-  parentTaskId    String?
-  parentTask      Task?         @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
-  subtasks        Task[]        @relation("TaskSubtasks")
+  id           String          @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projectId    String?
+  project      Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  sectionId    String?
+  section      ProjectSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  parentTaskId String?
+  parentTask   Task?           @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subtasks     Task[]          @relation("TaskSubtasks")
+  milestoneId  String?
+  milestone    Milestone?      @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
 
-  title           String
-  description     String?
-  status          TaskStatus    @default(TODO)
-  priority        TaskPriority  @default(P4)
+  // Sequential per-project ticket number (paired with the owning project's `key` to display
+  // e.g. "ENG-1"). Null for tasks with no project, since there's no sequence to draw from.
+  number      Int?
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(P4)
 
-  startAt         DateTime?     @db.Timestamptz
-  dueAt           DateTime?     @db.Timestamptz
+  startAt         DateTime? @db.Timestamptz
+  dueAt           DateTime? @db.Timestamptz
   durationMinutes Int?
 
-  position        Int           @default(0)
+  position Int @default(0)
 
   createdBy       String
-  createdByUser   User          @relation("TaskCreatedBy", fields: [createdBy], references: [id])
+  createdByUser   User      @relation("TaskCreatedBy", fields: [createdBy], references: [id])
   completedBy     String?
-  completedByUser User?         @relation("TaskCompletedBy", fields: [completedBy], references: [id])
-  completedAt     DateTime?     @db.Timestamptz
+  completedByUser User?     @relation("TaskCompletedBy", fields: [completedBy], references: [id])
+  completedAt     DateTime? @db.Timestamptz
 
-  assigneeId      String?
-  assignee        User?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  assigneeId String?
+  assignee   User?   @relation("TaskAssignee", fields: [assigneeId], references: [id])
 
-  createdAt       DateTime      @default(now()) @db.Timestamptz
-  updatedAt       DateTime      @updatedAt @db.Timestamptz
-  deletedAt       DateTime?     @db.Timestamptz
-  version         Int           @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz
+  updatedAt DateTime  @updatedAt @db.Timestamptz
+  deletedAt DateTime? @db.Timestamptz
+  version   Int       @default(1)
 
-  checklists      TaskChecklist[]
-  labels          TaskLabel[]
-  reminders       Reminder[]
-  recurrenceRule  RecurrenceRule?
-  comments        Comment[]
-  attachments     Attachment[]
+  checklists        TaskChecklist[]
+  labels            TaskLabel[]
+  reminders         Reminder[]
+  recurrenceRule    RecurrenceRule?
+  comments          Comment[]
+  attachments       Attachment[]
+  customFieldValues TaskCustomFieldValue[]
+  timeEntries       TimeEntry[]
+  // "blockedByLinks": rows where THIS task is the one waiting (blockedTaskId).
+  // "blockingLinks": rows where THIS task is the one others are waiting on (blockerTaskId).
+  blockedByLinks    TaskDependency[]       @relation("DependencyBlocked")
+  blockingLinks     TaskDependency[]       @relation("DependencyBlocker")
 
+  @@unique([projectId, number])
   @@index([workspaceId])
   @@index([projectId])
   @@index([sectionId])
   @@index([parentTaskId])
+  @@index([milestoneId])
   @@index([status])
   @@index([priority])
   @@index([dueAt])
@@ -286,15 +346,59 @@ model Task {
   @@index([assigneeId])
 }
 
-model TaskChecklist {
-  id        String    @id @default(uuid())
+model TaskDependency {
+  id            String   @id @default(uuid())
+  blockerTaskId String
+  blockerTask   Task     @relation("DependencyBlocker", fields: [blockerTaskId], references: [id], onDelete: Cascade)
+  blockedTaskId String
+  blockedTask   Task     @relation("DependencyBlocked", fields: [blockedTaskId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now()) @db.Timestamptz
+
+  @@unique([blockerTaskId, blockedTaskId])
+  @@index([blockerTaskId])
+  @@index([blockedTaskId])
+}
+
+model Milestone {
+  id         String    @id @default(uuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name       String
+  color      String?
+  dueDate    DateTime? @db.Timestamptz
+  achievedAt DateTime? @db.Timestamptz
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @db.Timestamptz
+
+  tasks Task[]
+
+  @@index([projectId])
+}
+
+model TimeEntry {
+  id        String   @id @default(uuid())
   taskId    String
-  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  minutes   Int
+  note      String?
+  loggedAt  DateTime @db.Timestamptz
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([taskId])
+  @@index([userId])
+}
+
+model TaskChecklist {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   title     String
-  isDone    Boolean   @default(false)
-  position  Int       @default(0)
-  createdAt DateTime  @default(now()) @db.Timestamptz
-  updatedAt DateTime  @updatedAt @db.Timestamptz
+  isDone    Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
 
   @@index([taskId])
 }
@@ -327,27 +431,27 @@ model TaskLabel {
 }
 
 model Reminder {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   taskId    String
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  remindAt  DateTime @db.Timestamptz
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  remindAt  DateTime  @db.Timestamptz
   sentAt    DateTime? @db.Timestamptz
-  createdAt DateTime @default(now()) @db.Timestamptz
+  createdAt DateTime  @default(now()) @db.Timestamptz
 
   @@index([taskId])
   @@index([remindAt])
 }
 
 model RecurrenceRule {
-  id         String              @id @default(uuid())
-  taskId     String              @unique
-  task       Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  frequency  RecurrenceFrequency
-  interval   Int                 @default(1)
-  byWeekday  Int[]               @default([])
-  until      DateTime?           @db.Timestamptz
-  createdAt  DateTime            @default(now()) @db.Timestamptz
-  updatedAt  DateTime            @updatedAt @db.Timestamptz
+  id        String              @id @default(uuid())
+  taskId    String              @unique
+  task      Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  frequency RecurrenceFrequency
+  interval  Int                 @default(1)
+  byWeekday Int[]               @default([])
+  until     DateTime?           @db.Timestamptz
+  createdAt DateTime            @default(now()) @db.Timestamptz
+  updatedAt DateTime            @updatedAt @db.Timestamptz
 }
 
 // ---------------------------------------------------------------------------
@@ -383,9 +487,9 @@ model Attachment {
   fileName   String
   mimeType   String
   sizeBytes  Int
-  storageKey String   // pointer into object storage; binary content never lives in Postgres
+  storageKey String // pointer into object storage; binary content never lives in Postgres
 
-  createdAt  DateTime @default(now()) @db.Timestamptz
+  createdAt DateTime @default(now()) @db.Timestamptz
 
   @@index([taskId])
   @@index([commentId])
@@ -431,9 +535,9 @@ model SavedFilter {
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name       String
-  expression Json     // structured filter expression tree, see docs/PRODUCT_SPEC.md
-  createdAt  DateTime  @default(now()) @db.Timestamptz
-  updatedAt  DateTime  @updatedAt @db.Timestamptz
+  expression Json // structured filter expression tree, see docs/PRODUCT_SPEC.md
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
 
   @@index([userId])
 }
@@ -464,13 +568,50 @@ model ActivityLog {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actorId     String?
   actor       User?     @relation(fields: [actorId], references: [id])
-  entityType  String    // e.g. "Task", "Project"
+  entityType  String // e.g. "Task", "Project"
   entityId    String
-  action      String    // e.g. "created", "updated", "completed", "deleted"
+  action      String // e.g. "created", "updated", "completed", "deleted"
   metadata    Json?
   createdAt   DateTime  @default(now()) @db.Timestamptz
 
   @@index([workspaceId])
   @@index([createdAt])
   @@index([entityType, entityId])
+}
+
+// ---------------------------------------------------------------------------
+// Custom Fields
+// ---------------------------------------------------------------------------
+
+model CustomFieldDefinition {
+  id          String          @id @default(uuid())
+  workspaceId String
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  type        CustomFieldType
+  options     Json? // for SELECT: string[] of choices
+  position    Int             @default(0)
+  createdAt   DateTime        @default(now()) @db.Timestamptz
+  updatedAt   DateTime        @updatedAt @db.Timestamptz
+  deletedAt   DateTime?       @db.Timestamptz
+
+  values TaskCustomFieldValue[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model TaskCustomFieldValue {
+  id        String                @id @default(uuid())
+  taskId    String
+  task      Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fieldId   String
+  field     CustomFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  value     Json?
+  createdAt DateTime              @default(now()) @db.Timestamptz
+  updatedAt DateTime              @updatedAt @db.Timestamptz
+
+  @@unique([taskId, fieldId])
+  @@index([taskId])
+  @@index([fieldId])
 }
